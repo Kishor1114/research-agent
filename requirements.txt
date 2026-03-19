@@ -1,0 +1,8 @@
+groq
+requests
+chromadb
+sentence-transformers
+streamlit
+PyPDF2
+reportlab
+python-dotenv
