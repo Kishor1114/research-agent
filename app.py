@@ -14,8 +14,12 @@ import os
 try:
     from config import GROQ_API_KEY, TAVILY_API_KEY
 except ImportError:
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-    TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+    try:
+        GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+        TAVILY_API_KEY = st.secrets["TAVILY_API_KEY"]
+    except:
+        GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+        TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 
 
