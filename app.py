@@ -8,6 +8,11 @@ from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
+from planner import decide_tool
+from logger import log_search, log_memory, log_llm, log_result
+from planner import decide_mode, decide_tool
+from agent_modes import run_compare, run_fact_check, run_report
+import time
 import io
 
 import os
@@ -125,28 +130,99 @@ def check_memory(question):
         return results["documents"][0][0]
     return None
 
+def academic_search(query):
+    # Search Semantic Scholar - free academic API
+    try:
+        response = requests.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={
+                "query": query,
+                "limit": 3,
+                "fields": "title,authors,year,externalIds"
+            }
+        )
+        data = response.json()
+        papers = data.get("data", [])
+        if not papers:
+            return None
+        output = "Academic search results:\n"
+        for p in papers:
+            output += f"Title: {p.get('title')}\n"
+            output += f"Year: {p.get('year')}\n"
+            authors = p.get('authors', [])
+            output += f"Authors: {', '.join([a['name'] for a in authors])}\n\n"
+        return output
+    except:
+        return None
+
 # --- Ask ---
 def ask(question, chat_history=[], pdf_context=None):
-    if pdf_context:
+    start_time = time.time()
+
+    # --- Step 1: Agent decides which tool to use ---
+    memory_available = collection.count() > 0
+    has_pdf = pdf_context is not None
+
+    tool = decide_tool(
+        client=client,
+        question=question,
+        has_pdf=has_pdf,
+        memory_available=memory_available
+    )
+
+    # --- Step 2: Execute the chosen tool ---
+    if tool == "pdf" and pdf_context:
+        log_llm("Reading PDF...")
         context = f"PDF Document Content:\n{pdf_context}"
         source = "pdf"
-    else:
+
+    elif tool == "memory":
         memory = check_memory(question)
         if memory:
+            log_memory(hit=True)
             context = f"From previous research:\n{memory}"
             source = "memory"
         else:
+            log_memory(hit=False)
+            log_search(question)
             context = web_search(question)
             source = "web"
+            tool = "search"
+
+    elif tool == "academic_search":
+        log_search(f"[ACADEMIC] {question}")
+        academic_context = academic_search(question)
+        web_context = web_search(question)
+        if academic_context:
+            context = f"Academic sources:\n{academic_context}\n\nWeb sources:\n{web_context}"
+        else:
+            context = web_context
+        source = "web"
+
+    else:
+        log_search(question)
+        context = web_search(question)
+        source = "web"
+
+    # --- Step 3: Generate answer ---
+    log_llm("Generating answer...")
 
     messages = [
         {
             "role": "system",
-            "content": "You are a helpful research assistant. Answer clearly based on context provided."
+            "content": """You are a helpful research assistant. Follow these rules strictly:
+1. Answer clearly based on the context provided
+2. If the context does not clearly confirm a specific fact — especially dates, years, or personal details about real people — say 'I could not find reliable information about this. Please verify from official sources.'
+3. Never guess or assume specific facts like graduation years, birth dates, or achievements of real people
+4. If you are uncertain say so clearly — do not make up an answer
+5. For factual questions about specific people always mention where the info came from
+6. End your answer with: Sources: [list the relevant URLs from context if available]"""
         }
     ]
+
     for msg in chat_history[-6:]:
         messages.append({"role": msg["role"], "content": msg["content"]})
+
     messages.append({
         "role": "user",
         "content": f"Question: {question}\n\nContext ({source}):\n{context}"
@@ -156,12 +232,27 @@ def ask(question, chat_history=[], pdf_context=None):
         model="llama-3.3-70b-versatile",
         messages=messages
     )
+
     answer = response.choices[0].message.content
 
-    if source == "web":
+    # --- Step 4: Save to memory if confident ---
+    uncertain_phrases = [
+        "could not find reliable",
+        "please verify",
+        "i am not sure",
+        "unclear",
+        "i don't know"
+    ]
+    is_uncertain = any(phrase in answer.lower() for phrase in uncertain_phrases)
+
+    if source == "web" and not is_uncertain:
         save_to_memory(question, answer)
 
-    return answer, source
+    # --- Step 5: Track metrics ---
+    elapsed = round(time.time() - start_time, 2)
+    log_result(source, f"({elapsed}s)")
+
+    return answer, source, elapsed, tool
 
 # --- Compare two topics ---
 def compare_topics(topic1, topic2):
@@ -199,7 +290,6 @@ def compare_topics(topic1, topic2):
         verdict = verdict_response.choices[0].message.content
 
     return summary1, summary2, verdict
-
 
 # --- Report Generator ---
 def generate_report(topic):
@@ -322,16 +412,6 @@ def create_pdf(topic, report_content):
                 ParagraphStyle('sl', fontSize=9, fontName='Helvetica',
                     textColor=TEXT_GREY, alignment=TA_CENTER)),
         ]
-
-    def stat_box(number, label):
-        return Table([[
-            Paragraph(f'<font size="20"><b>{number}</b></font>',
-                    ParagraphStyle('sn2', fontSize=20, fontName='Helvetica-Bold',
-                                   textColor=ACCENT, alignment=TA_CENTER)),
-            Paragraph(label,
-                    ParagraphStyle('sl2', fontSize=9, fontName='Helvetica',
-                                   textColor=TEXT_GREY, alignment=TA_CENTER)),
-        ]], colWidths=[2.0*inch])                                                        
 
     stats = Table(
         [[
@@ -851,7 +931,7 @@ with st.sidebar:
     # Mode selector
     mode = st.radio(
         "Mode",
-        ["💬 Chat", "⚖️ Compare Topics", "📄 PDF Chat", "📊 Report Generator", "✅ Fact Checker", "📚 Multi-Doc", "🎓 Study Buddy", "🤖 Multi-Agent"],
+        ["🤖 Auto (Smart Mode)", "💬 Chat", "⚖️ Compare Topics", "📄 PDF Chat", "📊 Report Generator", "✅ Fact Checker", "📚 Multi-Doc", "🎓 Study Buddy", "🤖 Multi-Agent"],
         label_visibility="collapsed"
     )
 
@@ -876,14 +956,253 @@ with st.sidebar:
     st.subheader("🧠 Memory")
     st.metric("Topics stored", collection.count())
     if st.button("Clear memory"):
-        chroma.delete_collection("research_memory")
-        chroma.get_or_create_collection("research_memory")
-        st.success("Cleared!")
+        try:
+            chroma.delete_collection("research_memory")
+        except:
+            pass
+        st.cache_resource.clear()
+        st.success("Cleared! Restarting...")
+        st.rerun()
 
     st.divider()
     st.caption("Built with Groq + Llama 3 + ChromaDB + Tavily")
 
 # --- Main area ---
+
+# =====================
+# AUTO SMART MODE
+# =====================
+if mode == "🤖 Auto (Smart Mode)":
+    st.title("🤖 Auto Research Agent")
+    st.caption("Just ask anything — I decide what to do automatically")
+
+    auto_file = st.file_uploader(
+        "Upload a file (optional — for PDF/Study/Multi-doc questions)",
+        type="pdf", key="auto_file"
+    )
+
+    for key, default in [
+        ("auto_messages", []), ("auto_quiz_questions", []),
+        ("auto_quiz_answers", {}), ("auto_quiz_submitted", False), ("auto_quiz_score", 0)
+    ]:
+        if key not in st.session_state:
+            st.session_state[key] = default
+
+    # Show chat history
+    for msg in st.session_state.auto_messages:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+            if "meta" in msg:
+                st.caption(msg["meta"])
+
+    # ── Quiz display — OUTSIDE chat input block ──
+    if st.session_state.auto_quiz_questions and not st.session_state.auto_quiz_submitted:
+        st.divider()
+        st.subheader("📝 Quiz Time!")
+        for i, q in enumerate(st.session_state.auto_quiz_questions):
+            st.markdown(f"**Q{i+1}: {q['question']}**")
+            selected = st.radio(
+                f"Q{i+1}",
+                [f"{k}) {v}" for k, v in q["options"].items()],
+                key=f"auto_q_{i}",
+                label_visibility="collapsed"
+            )
+            st.session_state.auto_quiz_answers[i] = selected[0] if selected else ""
+            st.divider()
+
+        if st.button("Submit Quiz", key="auto_submit"):
+            score = sum(1 for i, q in enumerate(st.session_state.auto_quiz_questions)
+                        if st.session_state.auto_quiz_answers.get(i) == q["answer"])
+            st.session_state.auto_quiz_score = score
+            st.session_state.auto_quiz_submitted = True
+            st.rerun()
+
+    # ── Quiz results — OUTSIDE chat input block ──
+    if st.session_state.auto_quiz_submitted and st.session_state.auto_quiz_questions:
+        total = len(st.session_state.auto_quiz_questions)
+        score = st.session_state.auto_quiz_score
+        percentage = int((score / total) * 100)
+
+        if percentage >= 80:
+            st.success(f"Excellent! {score}/{total} ({percentage}%)")
+        elif percentage >= 60:
+            st.warning(f"Good effort! {score}/{total} ({percentage}%)")
+        else:
+            st.error(f"Needs revision! {score}/{total} ({percentage}%)")
+
+        st.progress(percentage / 100)
+        st.divider()
+
+        for i, q in enumerate(st.session_state.auto_quiz_questions):
+            your_ans = st.session_state.auto_quiz_answers.get(i, "")
+            correct_ans = q["answer"]
+            if your_ans == correct_ans:
+                st.success(f"Q{i+1}: {q['question']}")
+                st.write(f"✅ {your_ans}) {q['options'].get(your_ans, '')}")
+            else:
+                st.error(f"Q{i+1}: {q['question']}")
+                st.write(f"❌ Your: {your_ans}) {q['options'].get(your_ans, '')}")
+                st.write(f"✅ Correct: {correct_ans}) {q['options'].get(correct_ans, '')}")
+            if q["explanation"]:
+                st.caption(f"Explanation: {q['explanation']}")
+            st.divider()
+
+        if st.button("Retake", key="auto_retake"):
+            st.session_state.auto_quiz_submitted = False
+            st.session_state.auto_quiz_answers = {}
+            st.session_state.auto_quiz_questions = []
+            st.rerun()
+
+    # ── Chat input — AFTER quiz display ──
+    if question := st.chat_input("Ask me anything..."):
+        with st.chat_message("user"):
+            st.write(question)
+        st.session_state.auto_messages.append({"role": "user", "content": question})
+
+        start_time = time.time()
+        detected_mode, needs_file, reason = decide_mode(client, question)
+
+        if needs_file and not auto_file:
+            response_text = f"I detected you want to use **{detected_mode.replace('_', ' ').title()}** mode for this. Please upload a PDF file to continue!"
+            with st.chat_message("assistant"):
+                st.write(response_text)
+                st.caption(f"🧠 Detected mode: {detected_mode} | Waiting for file upload")
+            st.session_state.auto_messages.append({
+                "role": "assistant", "content": response_text,
+                "meta": f"🧠 Mode: {detected_mode}"
+            })
+
+        else:
+            with st.chat_message("assistant"):
+
+                if detected_mode == "chat":
+                    with st.spinner("Thinking..."):
+                        answer, source, elapsed, tool = ask(question, st.session_state.auto_messages)
+                    st.write(answer)
+                    icons = {"memory": "🧠 from memory", "web": "🌐 searched web", "pdf": "📄 from PDF"}
+                    col1, col2, col3 = st.columns(3)
+                    with col1: st.caption(icons.get(source, ""))
+                    with col2: st.caption(f"⚡ Tool: {tool}")
+                    with col3: st.caption(f"⏱️ {elapsed}s")
+                    st.session_state.auto_messages.append({"role": "assistant", "content": answer, "meta": f"🧠 chat | ⚡ {tool} | ⏱️ {elapsed}s"})
+
+                elif detected_mode == "compare":
+                    import json as _json
+                    with st.spinner("Extracting topics..."):
+                        raw = client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role": "user", "content": f"Extract two topics being compared. JSON only: {{\"topic1\": \"...\", \"topic2\": \"...\"}}\n\nQuestion: {question}"}],
+                            max_tokens=80
+                        ).choices[0].message.content.strip()
+                        try:
+                            if "```" in raw: raw = raw.split("```")[1].replace("json", "").strip()
+                            topics = _json.loads(raw)
+                            topic1, topic2 = topics.get("topic1", "Topic 1"), topics.get("topic2", "Topic 2")
+                        except:
+                            topic1, topic2 = "Topic 1", "Topic 2"
+                    s1, s2, verdict = compare_topics(topic1, topic2)
+                    col1, col2 = st.columns(2)
+                    with col1: st.subheader(topic1); st.write(s1)
+                    with col2: st.subheader(topic2); st.write(s2)
+                    st.divider(); st.subheader("⚡ Verdict"); st.info(verdict)
+                    elapsed = round(time.time() - start_time, 2)
+                    st.caption(f"🧠 compare | ⏱️ {elapsed}s")
+                    st.session_state.auto_messages.append({"role": "assistant", "content": f"Compared {topic1} vs {topic2}. Verdict: {verdict}", "meta": f"🧠 compare | ⏱️ {elapsed}s"})
+
+                elif detected_mode == "fact_check":
+                        result = run_fact_check(client, web_search, question)
+                        detected_verdict = "UNVERIFIED"
+                        for v in ["TRUE", "FALSE", "MISLEADING", "UNVERIFIED"]:
+                            if f"VERDICT: {v}" in result:
+                                detected_verdict = v
+                                break
+                        emoji_map = {"TRUE": "✅", "FALSE": "❌", "MISLEADING": "⚠️", "UNVERIFIED": "❓"}
+                        emoji = emoji_map.get(detected_verdict, "❓")
+                        if detected_verdict == "TRUE":
+                            st.success(f"{emoji} VERDICT: {detected_verdict}")
+                        elif detected_verdict == "FALSE":
+                            st.error(f"{emoji} VERDICT: {detected_verdict}")
+                        elif detected_verdict == "MISLEADING":
+                            st.warning(f"{emoji} VERDICT: {detected_verdict}")
+                        else:
+                            st.info(f"{emoji} VERDICT: {detected_verdict}")
+                        formatted_result = result.replace(" CONFIDENCE:", "\nCONFIDENCE:") \
+                                                 .replace(" SUMMARY:", "\nSUMMARY:")
+                        st.text(formatted_result)
+                        elapsed = round(time.time() - start_time, 2)
+                        st.caption(f"🧠 Mode: fact_check | ⏱️ {elapsed}s")
+                        st.session_state.auto_messages.append({
+                            "role": "assistant",
+                            "content": result,
+                            "meta": f"🧠 fact_check | ⏱️ {elapsed}s"
+                        })
+
+                elif detected_mode == "report":
+                    topic = question
+                    for phrase in ["generate a report on", "write a report about", "create a report on", "report on"]:
+                        topic = topic.lower().replace(phrase, "").strip()
+                    report_content = generate_report(topic)
+                    for section, content in report_content.items():
+                        st.subheader(section); st.write(content); st.divider()
+                    st.download_button("⬇️ Download as PDF", create_pdf(topic, report_content), f"{topic}_report.pdf", "application/pdf")
+                    elapsed = round(time.time() - start_time, 2)
+                    st.caption(f"🧠 report | ⏱️ {elapsed}s")
+                    st.session_state.auto_messages.append({"role": "assistant", "content": f"Generated report on: {topic}", "meta": f"🧠 report | ⏱️ {elapsed}s"})
+
+                elif detected_mode == "study_buddy" and auto_file:
+                    pdf_text = read_pdf(auto_file)
+                    with st.spinner("Generating quiz from your notes..."):
+                        quiz_text = generate_quiz(f"Difficulty level: Medium\n\n{pdf_text}", 5)
+                        questions = parse_quiz(quiz_text)
+                    if questions:
+                        st.session_state.auto_quiz_questions = questions
+                        st.session_state.auto_quiz_answers = {}
+                        st.session_state.auto_quiz_submitted = False
+                        st.session_state.auto_quiz_score = 0
+                        st.success(f"Quiz ready — {len(questions)} questions from your notes!")
+                    else:
+                        st.error("Could not generate quiz. Try again!")
+                    elapsed = round(time.time() - start_time, 2)
+                    st.caption(f"🧠 study_buddy | 📄 {auto_file.name} | ⏱️ {elapsed}s")
+                    st.session_state.auto_messages.append({"role": "assistant", "content": f"Generated quiz from {auto_file.name}", "meta": f"🧠 study_buddy | ⏱️ {elapsed}s"})
+                    st.rerun()
+
+                elif detected_mode == "pdf_chat" and auto_file:
+                    pdf_text = read_pdf(auto_file)
+                    answer, source, elapsed, tool = ask(question, [], pdf_text)
+                    st.write(answer)
+                    st.caption(f"🧠 pdf_chat | 📄 {auto_file.name} | ⏱️ {elapsed}s")
+                    st.session_state.auto_messages.append({"role": "assistant", "content": answer, "meta": f"🧠 pdf_chat | ⏱️ {elapsed}s"})
+
+                elif detected_mode == "multi_doc" and auto_file:
+                    pdf_text = read_pdf(auto_file)
+                    with st.spinner("Analyzing document..."):
+                        result = analyze_multiple_docs({auto_file.name: pdf_text}, question)
+                    st.write(result)
+                    elapsed = round(time.time() - start_time, 2)
+                    st.caption(f"🧠 multi_doc | ⏱️ {elapsed}s")
+                    st.session_state.auto_messages.append({"role": "assistant", "content": result, "meta": f"🧠 multi_doc | ⏱️ {elapsed}s"})
+
+                elif detected_mode == "multi_agent":
+                    thoughts = run_multi_agent(question)
+                    for agent_name, output in thoughts:
+                        if agent_name == "Researcher":
+                            with st.expander("🔍 Researcher findings", expanded=False): st.write(output)
+                        elif agent_name == "Critic":
+                            with st.expander("🔎 Critic review", expanded=False): st.write(output)
+                        elif agent_name == "Writer":
+                            st.subheader("✍️ Final Answer"); st.write(output)
+                    elapsed = round(time.time() - start_time, 2)
+                    st.caption(f"🧠 multi_agent | ⏱️ {elapsed}s")
+                    st.session_state.auto_messages.append({"role": "assistant", "content": "Multi-agent research complete", "meta": f"🧠 multi_agent | ⏱️ {elapsed}s"})
+
+                else:
+                    with st.spinner("Thinking..."):
+                        answer, source, elapsed, tool = ask(question, st.session_state.auto_messages)
+                    st.write(answer)
+                    st.caption(f"🧠 {detected_mode} | ⚡ {tool} | ⏱️ {elapsed}s")
+                    st.session_state.auto_messages.append({"role": "assistant", "content": answer, "meta": f"🧠 {detected_mode} | ⏱️ {elapsed}s"})
+
 
 # CHAT MODE
 if mode == "💬 Chat":
@@ -907,10 +1226,17 @@ if mode == "💬 Chat":
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                answer, source = ask(question, st.session_state.messages)
+                answer, source, elapsed, tool = ask(question, st.session_state.messages)
             st.write(answer)
-            icons = {"memory": "🧠 answered from memory", "web": "🌐 searched the web", "pdf": "📄 from PDF"}
-            st.caption(icons.get(source, ""))
+            icons = {"memory": "🧠 answered from memory", "web": "🌐 searched the web", "pdf": "📄 from PDF", "academic_search": "🎓 searched academic sources"}
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.caption(f"{icons.get(source, '')} ")
+            with col2:
+                st.caption(f"⚡ Tool: {tool}")
+            with col3:
+                st.caption(f"⏱️ {elapsed}s")
+            
 
         st.session_state.messages.append({
             "role": "assistant",
@@ -981,7 +1307,7 @@ elif mode == "📄 PDF Chat":
 
             with st.chat_message("assistant"):
                 with st.spinner("Reading PDF..."):
-                    answer, source = ask(question, st.session_state.pdf_messages, pdf_context)
+                    answer, source, elapsed, tool = ask(question, st.session_state.pdf_messages, pdf_context)
                 st.write(answer)
                 st.caption("📄 answered from PDF")
 
