@@ -6,7 +6,7 @@ MODES = {
     "compare": "Comparing two things, X vs Y, differences between",
     "fact_check": "Verifying claims, is it true that, fact checking, WhatsApp forwards",
     "report": "Generate a report, write a detailed report, research report on",
-    "multi_agent": "Deep research, complex analysis, thorough investigation, multiple perspectives",
+    "multi_agent": "Deep research, complex analysis, thorough investigation, multiple perspectives, analyze, investigate, comprehensive research, detailed study, what are the pros and cons, advantages and disadvantages",
     "pdf_chat": "Questions about an uploaded document, summarize my PDF, read this file",
     "multi_doc": "Compare multiple documents, analyze these files, what do these docs say",
     "study_buddy": "Quiz me, test me, create flashcards, study questions from my notes"

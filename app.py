@@ -12,6 +12,7 @@ from planner import decide_tool
 from logger import log_search, log_memory, log_llm, log_result
 from planner import decide_mode, decide_tool
 from agent_modes import run_compare, run_fact_check, run_report
+from verifier import verify_answer, extract_sources
 import time
 import io
 
@@ -235,6 +236,14 @@ def ask(question, chat_history=[], pdf_context=None):
 
     answer = response.choices[0].message.content
 
+    # --- Verification step ---
+    verification = None
+    if source == "web" and len(answer) > 100:
+        verification = verify_answer(client, question, answer, context)
+        log_llm(f"Verification: {verification.get('confidence', 'unknown')} confidence")
+
+    sources_list = extract_sources(context)
+
     # --- Step 4: Save to memory if confident ---
     uncertain_phrases = [
         "could not find reliable",
@@ -252,7 +261,7 @@ def ask(question, chat_history=[], pdf_context=None):
     elapsed = round(time.time() - start_time, 2)
     log_result(source, f"({elapsed}s)")
 
-    return answer, source, elapsed, tool
+    return answer, source, elapsed, tool, verification, sources_list
 
 # --- Compare two topics ---
 def compare_topics(topic1, topic2):
@@ -1077,13 +1086,28 @@ if mode == "🤖 Auto (Smart Mode)":
 
                 if detected_mode == "chat":
                     with st.spinner("Thinking..."):
-                        answer, source, elapsed, tool = ask(question, st.session_state.auto_messages)
+                        answer, source, elapsed, tool, verification, sources_list = ask(question, st.session_state.auto_messages)
                     st.write(answer)
+
+                    if verification:
+                        conf = verification.get("confidence", "medium")
+                        conf_display = {"high": "🟢 High confidence", "medium": "🟡 Medium confidence", "low": "🔴 Low confidence"}
+                        st.caption(conf_display.get(conf, "🟡 Medium confidence"))
+                        if conf == "low" or not verification.get("supported", True):
+                            st.warning(f"⚠️ Low confidence. {verification.get('issues', 'Please verify from official sources.')}")
+
+
                     icons = {"memory": "🧠 from memory", "web": "🌐 searched web", "pdf": "📄 from PDF"}
                     col1, col2, col3 = st.columns(3)
                     with col1: st.caption(icons.get(source, ""))
                     with col2: st.caption(f"⚡ Tool: {tool}")
                     with col3: st.caption(f"⏱️ {elapsed}s")
+
+                    if sources_list:
+                        with st.expander("📎 Sources used"):
+                            for url in sources_list:
+                                st.markdown(f"- {url}")
+
                     st.session_state.auto_messages.append({"role": "assistant", "content": answer, "meta": f"🧠 chat | ⚡ {tool} | ⏱️ {elapsed}s"})
 
                 elif detected_mode == "compare":
@@ -1169,7 +1193,7 @@ if mode == "🤖 Auto (Smart Mode)":
 
                 elif detected_mode == "pdf_chat" and auto_file:
                     pdf_text = read_pdf(auto_file)
-                    answer, source, elapsed, tool = ask(question, [], pdf_text)
+                    answer, source, elapsed, tool, verification, sources_list = ask(question, st.session_state.pdf_messages, pdf_context)
                     st.write(answer)
                     st.caption(f"🧠 pdf_chat | 📄 {auto_file.name} | ⏱️ {elapsed}s")
                     st.session_state.auto_messages.append({"role": "assistant", "content": answer, "meta": f"🧠 pdf_chat | ⏱️ {elapsed}s"})
@@ -1198,14 +1222,14 @@ if mode == "🤖 Auto (Smart Mode)":
 
                 else:
                     with st.spinner("Thinking..."):
-                        answer, source, elapsed, tool = ask(question, st.session_state.auto_messages)
+                        answer, source, elapsed, tool, verification, sources_list = ask(question, st.session_state.messages)
                     st.write(answer)
                     st.caption(f"🧠 {detected_mode} | ⚡ {tool} | ⏱️ {elapsed}s")
                     st.session_state.auto_messages.append({"role": "assistant", "content": answer, "meta": f"🧠 {detected_mode} | ⏱️ {elapsed}s"})
 
 
 # CHAT MODE
-if mode == "💬 Chat":
+elif mode == "💬 Chat":
     st.title("💬 Research Chat")
     st.caption("Ask anything — searches the web and remembers what it learns")
 
@@ -1226,9 +1250,21 @@ if mode == "💬 Chat":
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                answer, source, elapsed, tool = ask(question, st.session_state.messages)
+                answer, source, elapsed, tool, verification, sources_list = ask(question, st.session_state.messages)
             st.write(answer)
             icons = {"memory": "🧠 answered from memory", "web": "🌐 searched the web", "pdf": "📄 from PDF", "academic_search": "🎓 searched academic sources"}
+            
+            # Confidence badge
+            if verification:
+                conf = verification.get("confidence", "medium")
+                conf_display = {"high": "🟢 High confidence", "medium": "🟡 Medium confidence", "low": "🔴 Low confidence"}
+                st.caption(conf_display.get(conf, "🟡 Medium confidence"))
+
+                if conf == "low" or not verification.get("supported", True):
+                    st.warning(f"⚠️ Low confidence. {verification.get('issues', 'Please verify from official sources.')}")
+                if verification.get("correction"):
+                    st.info(f"💡 Suggested correction: {verification.get('correction')}")
+            
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.caption(f"{icons.get(source, '')} ")
@@ -1236,6 +1272,11 @@ if mode == "💬 Chat":
                 st.caption(f"⚡ Tool: {tool}")
             with col3:
                 st.caption(f"⏱️ {elapsed}s")
+
+            if sources_list:
+                with st.expander("📎 Sources used"):
+                    for url in sources_list:
+                        st.markdown(f"- {url}")
             
 
         st.session_state.messages.append({
@@ -1307,7 +1348,7 @@ elif mode == "📄 PDF Chat":
 
             with st.chat_message("assistant"):
                 with st.spinner("Reading PDF..."):
-                    answer, source, elapsed, tool = ask(question, st.session_state.pdf_messages, pdf_context)
+                    answer, source, elapsed, tool, verification, sources_list = ask(question, st.session_state.pdf_messages, pdf_context)
                 st.write(answer)
                 st.caption("📄 answered from PDF")
 
