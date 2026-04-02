@@ -81,6 +81,16 @@ def load_clients():
 
 client, embedder, chroma, collection = load_clients()
 
+# Session metrics
+if "total_queries" not in st.session_state:
+    st.session_state.total_queries = 0
+if "memory_hits" not in st.session_state:
+    st.session_state.memory_hits = 0
+if "total_elapsed" not in st.session_state:
+    st.session_state.total_elapsed = 0.0
+if "high_confidence" not in st.session_state:
+    st.session_state.high_confidence = 0
+
 # --- Web Search ---
 def web_search(query):
     response = requests.post(
@@ -108,14 +118,22 @@ def read_pdf(uploaded_file):
     return text[:6000]
 
 # --- Memory ---
-def save_to_memory(question, answer):
+def save_to_memory(question, answer, confidence="medium", topic="general"):
+    import datetime
     text = f"Q: {question}\nA: {answer}"
     embedding = embedder.encode(text).tolist()
     existing = collection.count()
+    metadata = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "confidence": confidence,
+        "topic": topic,
+        "question": question[:100]
+    }
     collection.add(
         documents=[text],
         embeddings=[embedding],
-        ids=[f"mem_{existing + 1}"]
+        ids=[f"mem_{existing + 1}"],
+        metadatas=[metadata]
     )
 
 def check_memory(question):
@@ -255,11 +273,20 @@ def ask(question, chat_history=[], pdf_context=None):
     is_uncertain = any(phrase in answer.lower() for phrase in uncertain_phrases)
 
     if source == "web" and not is_uncertain:
-        save_to_memory(question, answer)
+        conf = verification.get("confidence", "medium") if verification else "medium"
+        save_to_memory(question, answer, confidence=conf)
 
     # --- Step 5: Track metrics ---
     elapsed = round(time.time() - start_time, 2)
     log_result(source, f"({elapsed}s)")
+
+    # Track session metrics
+    st.session_state.total_queries += 1
+    st.session_state.total_elapsed += elapsed
+    if source == "memory":
+        st.session_state.memory_hits += 1
+    if verification and verification.get("confidence") == "high":
+        st.session_state.high_confidence += 1
 
     return answer, source, elapsed, tool, verification, sources_list
 
@@ -964,6 +991,29 @@ with st.sidebar:
     st.divider()
     st.subheader("🧠 Memory")
     st.metric("Topics stored", collection.count())
+    st.divider()
+    st.subheader("📊 Session Metrics")
+
+    total = st.session_state.get("total_queries", 0)
+    hits = st.session_state.get("memory_hits", 0)
+    elapsed_total = st.session_state.get("total_elapsed", 0.0)
+    high_conf = st.session_state.get("high_confidence", 0)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Queries", total)
+    with col2:
+        hit_rate = f"{int((hits/total)*100)}%" if total > 0 else "0%"
+        st.metric("Memory hit rate", hit_rate)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        avg_time = f"{round(elapsed_total/total, 1)}s" if total > 0 else "0s"
+        st.metric("Avg response", avg_time)
+    with col2:
+        conf_rate = f"{int((high_conf/total)*100)}%" if total > 0 else "0%"
+        st.metric("High conf %", conf_rate)
+        
     if st.button("Clear memory"):
         try:
             chroma.delete_collection("research_memory")
