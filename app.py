@@ -1,5 +1,6 @@
 import streamlit as st
 from groq import Groq
+
 import requests
 import chromadb
 from sentence_transformers import SentenceTransformer
@@ -8,10 +9,12 @@ from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
-from planner import decide_tool
+from planner import decide_tool, decide_mode
 from logger import log_search, log_memory, log_llm, log_result
-from planner import decide_mode, decide_tool
 from agent_modes import run_compare, run_fact_check, run_report
+from verifier import verify_answer, extract_sources
+from core.search import web_search as _web_search, academic_search as _academic_search
+from core.memory import save_to_memory as _save_to_memory, check_memory as _check_memory
 from verifier import verify_answer, extract_sources
 import time
 import io
@@ -91,88 +94,25 @@ if "total_elapsed" not in st.session_state:
 if "high_confidence" not in st.session_state:
     st.session_state.high_confidence = 0
 
-# --- Web Search ---
 def web_search(query):
-    response = requests.post(
-        "https://api.tavily.com/search",
-        json={
-            "api_key": TAVILY_API_KEY,
-            "query": query,
-            "max_results": 3
-        }
-    )
-    results = response.json().get("results", [])
-    output = ""
-    for r in results:
-        output += f"Title: {r['title']}\n"
-        output += f"URL: {r['url']}\n"
-        output += f"Summary: {r['content']}\n\n"
-    return output if output else "No results found."
+    return _web_search(TAVILY_API_KEY, query)
 
-# --- PDF Reader ---
+def academic_search(query):
+    return _academic_search(query)
+
+def save_to_memory(question, answer, confidence="medium"):
+    _save_to_memory(collection, embedder, question, answer, confidence)
+
+def check_memory(question):
+    return _check_memory(collection, embedder, question)
+
 def read_pdf(uploaded_file):
+    uploaded_file.seek(0)
     pdf_reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.read()))
     text = ""
     for page in pdf_reader.pages:
         text += page.extract_text() + "\n"
     return text[:6000]
-
-# --- Memory ---
-def save_to_memory(question, answer, confidence="medium", topic="general"):
-    import datetime
-    text = f"Q: {question}\nA: {answer}"
-    embedding = embedder.encode(text).tolist()
-    existing = collection.count()
-    metadata = {
-        "timestamp": datetime.datetime.now().isoformat(),
-        "confidence": confidence,
-        "topic": topic,
-        "question": question[:100]
-    }
-    collection.add(
-        documents=[text],
-        embeddings=[embedding],
-        ids=[f"mem_{existing + 1}"],
-        metadatas=[metadata]
-    )
-
-def check_memory(question):
-    if collection.count() == 0:
-        return None
-    embedding = embedder.encode(question).tolist()
-    results = collection.query(
-        query_embeddings=[embedding],
-        n_results=1
-    )
-    distance = results["distances"][0][0]
-    if distance < 0.8:
-        return results["documents"][0][0]
-    return None
-
-def academic_search(query):
-    # Search Semantic Scholar - free academic API
-    try:
-        response = requests.get(
-            "https://api.semanticscholar.org/graph/v1/paper/search",
-            params={
-                "query": query,
-                "limit": 3,
-                "fields": "title,authors,year,externalIds"
-            }
-        )
-        data = response.json()
-        papers = data.get("data", [])
-        if not papers:
-            return None
-        output = "Academic search results:\n"
-        for p in papers:
-            output += f"Title: {p.get('title')}\n"
-            output += f"Year: {p.get('year')}\n"
-            authors = p.get('authors', [])
-            output += f"Authors: {', '.join([a['name'] for a in authors])}\n\n"
-        return output
-    except:
-        return None
 
 # --- Ask ---
 def ask(question, chat_history=[], pdf_context=None):
@@ -281,12 +221,12 @@ def ask(question, chat_history=[], pdf_context=None):
     log_result(source, f"({elapsed}s)")
 
     # Track session metrics
-    st.session_state.total_queries += 1
-    st.session_state.total_elapsed += elapsed
+    st.session_state.total_queries = st.session_state.get("total_queries", 0) + 1
+    st.session_state.total_elapsed = st.session_state.get("total_elapsed", 0.0) + elapsed
     if source == "memory":
-        st.session_state.memory_hits += 1
+        st.session_state.memory_hits = st.session_state.get("memory_hits", 0) + 1
     if verification and verification.get("confidence") == "high":
-        st.session_state.high_confidence += 1
+        st.session_state.high_confidence = st.session_state.get("high_confidence", 0) + 1
 
     return answer, source, elapsed, tool, verification, sources_list
 
@@ -987,32 +927,6 @@ with st.sidebar:
     else:
         pdf_context = None
         uploaded_pdf = None
-
-    st.divider()
-    st.subheader("🧠 Memory")
-    st.metric("Topics stored", collection.count())
-    st.divider()
-    st.subheader("📊 Session Metrics")
-
-    total = st.session_state.get("total_queries", 0)
-    hits = st.session_state.get("memory_hits", 0)
-    elapsed_total = st.session_state.get("total_elapsed", 0.0)
-    high_conf = st.session_state.get("high_confidence", 0)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Queries", total)
-    with col2:
-        hit_rate = f"{int((hits/total)*100)}%" if total > 0 else "0%"
-        st.metric("Memory hit rate", hit_rate)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        avg_time = f"{round(elapsed_total/total, 1)}s" if total > 0 else "0s"
-        st.metric("Avg response", avg_time)
-    with col2:
-        conf_rate = f"{int((high_conf/total)*100)}%" if total > 0 else "0%"
-        st.metric("High conf %", conf_rate)
         
     if st.button("Clear memory"):
         try:
@@ -1023,6 +937,18 @@ with st.sidebar:
         st.success("Cleared! Restarting...")
         st.rerun()
 
+    st.divider()
+    st.subheader("📊 Session Metrics")
+    total = st.session_state.get("total_queries", 0)
+    hits = st.session_state.get("memory_hits", 0)
+    elapsed_total = st.session_state.get("total_elapsed", 0.0)
+    high_conf = st.session_state.get("high_confidence", 0)
+    col1, col2 = st.columns(2)
+    with col1: st.metric("Queries", total)
+    with col2: st.metric("Mem hits", f"{int((hits/total)*100)}%" if total > 0 else "0%")
+    col1, col2 = st.columns(2)
+    with col1: st.metric("Avg time", f"{round(elapsed_total/total, 1)}s" if total > 0 else "0s")
+    with col2: st.metric("High conf", f"{int((high_conf/total)*100)}%" if total > 0 else "0%")
     st.divider()
     st.caption("Built with Groq + Llama 3 + ChromaDB + Tavily")
 
@@ -1507,7 +1433,7 @@ elif mode == "✅ Fact Checker":
 
             # Show full analysis
             st.subheader("Full Analysis")
-            st.write(result)
+            st.text(result)
 
             # Save to memory
             save_to_memory(f"Fact check: {claim}", result)
