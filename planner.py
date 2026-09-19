@@ -12,7 +12,7 @@ MODES = {
     "study_buddy": "Quiz me, test me, create flashcards, study questions from my notes"
 }
 
-def decide_mode(client, question, model="llama-3.3-70b-versatile"):
+def decide_mode(client, question, model="openai/gpt-oss-20b"):
     """
     LLM decides which mode to use based on the question.
     """
@@ -63,7 +63,7 @@ Rules:
         return "chat", False, "fallback"
 
 
-def decide_tool(client, question, has_pdf=False, memory_available=False, model="llama-3.3-70b-versatile"):
+def decide_tool(client, question, has_pdf=False, memory_available=False, model="openai/gpt-oss-20b"):
     """
     LLM decides which tool to use based on the question.
     """

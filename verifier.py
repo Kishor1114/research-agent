@@ -1,7 +1,7 @@
 import json
 from logger import log_llm
 
-def verify_answer(client, question, answer, context, model="llama-3.3-70b-versatile"):
+def verify_answer(client, question, answer, context, model="openai/gpt-oss-20b"):
     """
     Asks the LLM to verify its own answer against the source context.
     Returns confidence level and any corrections needed.

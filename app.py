@@ -188,7 +188,7 @@ def ask(question, chat_history=[], pdf_context=None):
     })
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-20b",
         messages=messages
     )
 
@@ -235,7 +235,7 @@ def compare_topics(topic1, topic2):
     with st.spinner(f"Researching {topic1}..."):
         results1 = web_search(topic1)
         response1 = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-20b",
             messages=[
                 {"role": "system", "content": "Summarize this research clearly in bullet points covering: what it is, key benefits, key challenges, and best use cases."},
                 {"role": "user", "content": f"Topic: {topic1}\n\nResearch:\n{results1}"}
@@ -246,7 +246,7 @@ def compare_topics(topic1, topic2):
     with st.spinner(f"Researching {topic2}..."):
         results2 = web_search(topic2)
         response2 = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-20b",
             messages=[
                 {"role": "system", "content": "Summarize this research clearly in bullet points covering: what it is, key benefits, key challenges, and best use cases."},
                 {"role": "user", "content": f"Topic: {topic2}\n\nResearch:\n{results2}"}
@@ -257,7 +257,7 @@ def compare_topics(topic1, topic2):
     # Generate final verdict
     with st.spinner("Generating comparison verdict..."):
         verdict_response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-20b",
             messages=[
                 {"role": "system", "content": "You are a research analyst. Give a concise verdict comparing both topics in 3-4 sentences. Be direct and opinionated."},
                 {"role": "user", "content": f"Compare {topic1} vs {topic2}.\n\n{topic1} summary:\n{summary1}\n\n{topic2} summary:\n{summary2}"}
@@ -288,7 +288,7 @@ def generate_report(topic):
     for section, prompt in sections.items():
         with st.spinner(f"Writing {section}..."):
             response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-20b",
                 messages=[
                     {
                         "role": "system",
@@ -681,7 +681,7 @@ def fact_check(claim):
 
     with st.spinner("Analyzing evidence..."):
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-20b",
             messages=[
                 {
                     "role": "system",
@@ -718,7 +718,7 @@ def analyze_multiple_docs(docs_content, question):
         combined += f"--- Document {i+1}: {name} ---\n{content}\n\n"
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-20b",
         messages=[
             {
                 "role": "system",
@@ -739,7 +739,7 @@ def analyze_multiple_docs(docs_content, question):
 # --- Study Buddy ---
 def generate_quiz(content, num_questions=5):
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-20b",
         messages=[
             {
                 "role": "system",
@@ -777,7 +777,7 @@ def run_multi_agent(question):
         research2 = web_search(f"{question} latest developments")
 
         researcher_response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-20b",
             messages=[
                 {
                     "role": "system",
@@ -804,7 +804,7 @@ Be thorough and factual."""
         st.write("Checking for gaps and bias...")
 
         critic_response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-20b",
             messages=[
                 {
                     "role": "system",
@@ -832,7 +832,7 @@ Be constructively critical and intellectually honest."""
         st.write("Writing final answer...")
 
         writer_response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-20b",
             messages=[
                 {
                     "role": "system",
@@ -1090,7 +1090,7 @@ if mode == "🤖 Auto (Smart Mode)":
                     import json as _json
                     with st.spinner("Extracting topics..."):
                         raw = client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
+                            model="openai/gpt-oss-20b",
                             messages=[{"role": "user", "content": f"Extract two topics being compared. JSON only: {{\"topic1\": \"...\", \"topic2\": \"...\"}}\n\nQuestion: {question}"}],
                             max_tokens=80
                         ).choices[0].message.content.strip()

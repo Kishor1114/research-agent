@@ -1,4 +1,4 @@
-def generate_answer(client, question, context, source, chat_history=[], model="llama-3.3-70b-versatile"):
+def generate_answer(client, question, context, source, chat_history=[], model="openai/gpt-oss-20b"):
     messages = [
         {
             "role": "system",
@@ -20,7 +20,7 @@ Sources:
     return response.choices[0].message.content
 
 
-def generate_comparison(client, topic, research, model="llama-3.3-70b-versatile"):
+def generate_comparison(client, topic, research, model="openai/gpt-oss-20b"):
     return client.chat.completions.create(
         model=model,
         messages=[
@@ -30,7 +30,7 @@ def generate_comparison(client, topic, research, model="llama-3.3-70b-versatile"
     ).choices[0].message.content
 
 
-def generate_verdict(client, topic1, topic2, summary1, summary2, model="llama-3.3-70b-versatile"):
+def generate_verdict(client, topic1, topic2, summary1, summary2, model="openai/gpt-oss-20b"):
     return client.chat.completions.create(
         model=model,
         messages=[

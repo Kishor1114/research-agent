@@ -21,7 +21,7 @@ def run_chat(client, question, context, source, chat_history, elapsed_start):
     })
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-20b",
         messages=messages
     )
     return response.choices[0].message.content
@@ -31,7 +31,7 @@ def run_compare(client, web_search_fn, question):
     # Extract two topics from question
     log_llm("Extracting topics to compare...")
     extract = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-20b",
         messages=[{
             "role": "user",
             "content": f"Extract exactly two topics being compared from this question. Respond with JSON only: {{\"topic1\": \"...\", \"topic2\": \"...\"}}\n\nQuestion: {question}"
@@ -54,7 +54,7 @@ def run_compare(client, web_search_fn, question):
     res2 = web_search_fn(topic2)
 
     sum1 = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-20b",
         messages=[
             {"role": "system", "content": "Summarize in bullet points: what it is, key benefits, key challenges, best use cases."},
             {"role": "user", "content": f"Topic: {topic1}\n\nResearch:\n{res1}"}
@@ -62,7 +62,7 @@ def run_compare(client, web_search_fn, question):
     ).choices[0].message.content
 
     sum2 = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-20b",
         messages=[
             {"role": "system", "content": "Summarize in bullet points: what it is, key benefits, key challenges, best use cases."},
             {"role": "user", "content": f"Topic: {topic2}\n\nResearch:\n{res2}"}
@@ -70,7 +70,7 @@ def run_compare(client, web_search_fn, question):
     ).choices[0].message.content
 
     verdict = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-20b",
         messages=[
             {"role": "system", "content": "Give a concise 3-4 sentence verdict comparing both. Be direct."},
             {"role": "user", "content": f"Compare {topic1} vs {topic2}.\n\n{topic1}:\n{sum1}\n\n{topic2}:\n{sum2}"}
@@ -87,7 +87,7 @@ def run_fact_check(client, web_search_fn, claim):
     combined = f"Search 1:\n{s1}\n\nSearch 2:\n{s2}\n\nSearch 3:\n{s3}"
 
     result = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-20b",
         messages=[
             {
                 "role": "system",
@@ -120,7 +120,7 @@ def run_report(client, web_search_fn, topic):
     report = {}
     for section, prompt in sections.items():
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-20b",
             messages=[
                 {"role": "system", "content": "You are an expert report writer. Write clearly and professionally in paragraphs."},
                 {"role": "user", "content": f"{prompt}\n\nContext:\n{web_context}"}
