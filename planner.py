@@ -2,14 +2,20 @@ import json
 from logger import log_decision, log_llm
 
 MODES = {
-    "chat": "General research questions, current events, factual questions",
-    "compare": "Comparing two things, X vs Y, differences between",
-    "fact_check": "Verifying claims, is it true that, fact checking, WhatsApp forwards",
-    "report": "Generate a report, write a detailed report, research report on",
-    "multi_agent": "Deep research, complex analysis, thorough investigation, multiple perspectives, analyze, investigate, comprehensive research, detailed study, what are the pros and cons, advantages and disadvantages",
-    "pdf_chat": "Questions about an uploaded document, summarize my PDF, read this file",
-    "multi_doc": "Compare multiple documents, analyze these files, what do these docs say",
-    "study_buddy": "Quiz me, test me, create flashcards, study questions from my notes"
+    "fact_check": "VERIFY A SPECIFIC CLAIM. Use this when the user asks whether a claim, statement, belief, rumor, assertion, or specific piece of information is true, false, misleading, or accurate. Strong signals: 'is it true', 'fact check', 'fact-check', 'is this claim correct', 'does evidence support', 'is it a myth', 'is this accurate'.",
+    "compare": "Comparing exactly two things, X vs Y, differences between them",
+    
+    "report": "Generate a structured research report, write a detailed report, research report on a topic",
+    
+    "multi_agent": "Deep research or complex investigation requiring comprehensive analysis, multiple perspectives, pros and cons, advantages and disadvantages",
+    
+    "pdf_chat": "Questions about an uploaded document, summarize my PDF, answer questions from this file",
+    
+    "multi_doc": "Compare or analyze multiple uploaded documents",
+    
+    "study_buddy": "Quiz me, test me, create flashcards, generate study questions from my notes",
+    
+    "chat": "General research questions that do NOT ask to verify a specific claim"
 }
 
 def decide_mode(client, question, model="openai/gpt-oss-20b"):
@@ -30,11 +36,39 @@ User question: {question}
 Respond with ONLY a JSON object:
 {{"mode": "chat", "reason": "This is a general question", "needs_file": false}}
 
-Rules:
-- needs_file is true ONLY for pdf_chat, multi_doc, study_buddy
-- For compare mode, extract both topics if possible
-- Be decisive — pick the best single mode
-- Default to "chat" if unsure"""
+IMPORTANT ROUTING RULES:
+
+1. FACT_CHECK HAS PRIORITY when the user is asking whether a SPECIFIC CLAIM is true, false, accurate, misleading, or supported by evidence.
+   Examples:
+   - "Is it true that X?"
+   - "Fact check this claim: X"
+   - "Does evidence support the claim that X?"
+   - "Is X a myth?"
+   - "Is this statement accurate: X?"
+
+2. COMPARE is for explicitly comparing TWO subjects.
+   Examples:
+   - "Python vs Java"
+   - "Compare React and Vue"
+
+3. PDF_CHAT is for questions about an uploaded PDF.
+
+4. MULTI_DOC is for analyzing or comparing multiple uploaded documents.
+
+5. STUDY_BUDDY is for quizzes, flashcards, and studying from uploaded notes.
+
+6. REPORT is for explicitly requesting a structured research report.
+
+7. MULTI_AGENT is for complex, comprehensive investigations requiring deep analysis or multiple perspectives.
+
+8. CHAT is the fallback for normal questions that do not clearly match the specialized modes.
+
+IMPORTANT:
+If the user asks "Is it true that..." or asks to verify a specific claim, choose "fact_check" rather than "chat".
+
+Respond with ONLY valid JSON:
+{{"mode": "fact_check", "reason": "The user is asking to verify a specific claim.", "needs_file": false}}
+"""
 
     try:
         print("DEBUG MODEL:", model)
