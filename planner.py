@@ -36,11 +36,19 @@ Rules:
 - Be decisive — pick the best single mode
 - Default to "chat" if unsure"""
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=150
-    )
+    try:
+        print("DEBUG MODEL:", model)
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=150
+        )
+    except Exception as e:
+        print("DEBUG MODEL:", model)
+        print("DEBUG ERROR TYPE:", type(e).__name__)
+        print("DEBUG ERROR:", str(e))
+        raise
 
     raw = response.choices[0].message.content.strip()
 
